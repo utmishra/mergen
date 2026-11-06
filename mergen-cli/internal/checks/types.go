@@ -32,25 +32,37 @@ type Result struct {
 	Output string // human-readable finding
 }
 
+// RemediationRisk controls how a fix may be offered. Only RiskSafe fixes may
+// be included in the default batch operation.
+type RemediationRisk string
+
+const (
+	RiskSafe       RemediationRisk = "safe"
+	RiskConfirm    RemediationRisk = "confirm"
+	RiskGuided     RemediationRisk = "guided"
+	RiskProhibited RemediationRisk = "prohibited"
+)
+
 // FixInfo describes the remediation for a failing check.
 type FixInfo struct {
 	Command       string
 	RequiresAdmin bool
 	Description   string
+	Risk          RemediationRisk
 }
 
 // Check is the interface every security check must satisfy.
 type Check interface {
-	CISID()       string
-	Name()        string
-	Section()     string
-	Category()    string
-	Severity()    string
+	CISID() string
+	Name() string
+	Section() string
+	Category() string
+	Severity() string
 	Description() string
 	Remediation() string
-	IsManual()    bool
-	Run()         Result
-	Fix()         *FixInfo // nil if not auto-fixable
+	IsManual() bool
+	Run() Result
+	Fix() *FixInfo // nil if not auto-fixable
 }
 
 // CheckResult pairs a Check with its Result after execution.

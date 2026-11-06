@@ -77,7 +77,7 @@ struct ResultsTopBar: View {
     private var failCount: Int { scanManager.scanResults.filter { $0.checkstatus == "Red" }.count }
     private var warnCount: Int { scanManager.scanResults.filter { $0.checkstatus == "Yellow" }.count }
     private var score:     Double { automated.isEmpty ? 0 : Double(passCount) / Double(automated.count) }
-    private var fixable:   Int { scanManager.scanResults.filter { $0.isAutoFixable }.count }
+    private var fixable:   Int { scanManager.scanResults.filter { $0.isBatchFixable }.count }
 
     private var scoreColor: Color {
         score >= 0.8 ? Color(red: 0.07, green: 0.66, blue: 0.47)

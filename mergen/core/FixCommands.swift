@@ -8,7 +8,45 @@
 
 import Foundation
 
+/// Safety policy for remediation. Only `.safe` findings may participate in a
+/// batch fix. `.confirm` findings remain available individually, while
+/// `.guided` and `.prohibited` findings must not execute through the current
+/// shell-based remediation path.
+enum RemediationRisk: String {
+    case safe
+    case confirm
+    case guided
+    case prohibited
+}
+
 extension Vulnerability {
+
+    // MARK: - Remediation safety policy
+
+    /// Reversible, narrowly-scoped changes approved for the default batch.
+    private static let safeBatchFixes: Set<String> = [
+        "1.2", "1.3", "1.4", "1.5",       // automatic security updates
+        "2.2.1", "2.2.2",                  // firewall and stealth mode
+        "2.6.5",                            // Gatekeeper
+        "2.11.2",                           // password immediately on wake
+        "6.1.1",                            // show filename extensions
+        "6.3.3", "6.3.4",                  // Safari anti-fraud/tracking
+        "6.4.1",                            // Terminal secure keyboard entry
+    ]
+
+    /// High-impact policy changes that need a guided workflow and therefore
+    /// must not run through the legacy shell-string executor.
+    private static let guidedFixes: Set<String> = [
+        "5.2.1", "5.2.2",                  // account password policy
+        "5.4", "5.5", "5.11",             // sudoers changes
+        "5.6",                              // root account configuration
+    ]
+
+    var remediationRisk: RemediationRisk {
+        if Vulnerability.safeBatchFixes.contains(cisID) { return .safe }
+        if Vulnerability.guidedFixes.contains(cisID) { return .guided }
+        return fixCommand == nil ? .prohibited : .confirm
+    }
 
     // MARK: - Fix Registries
 
@@ -230,6 +268,14 @@ extension Vulnerability {
         return nil
     }
 
-    /// `true` when this check failed AND has an auto-remediation available.
-    var isAutoFixable: Bool { checkstatus == "Red" && fixCommand != nil }
+    /// `true` when this check failed and may be fixed individually. Guided and
+    /// prohibited changes are deliberately excluded from legacy execution.
+    var isAutoFixable: Bool {
+        checkstatus == "Red"
+            && fixCommand != nil
+            && (remediationRisk == .safe || remediationRisk == .confirm)
+    }
+
+    /// `true` only for reviewed, reversible changes allowed in "Fix Safe Issues".
+    var isBatchFixable: Bool { isAutoFixable && remediationRisk == .safe }
 }

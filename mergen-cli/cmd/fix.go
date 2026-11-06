@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	flagFixID    string
-	flagFixAll   bool
-	flagFixDryRun bool
+	flagFixID                  string
+	flagFixAll                 bool
+	flagFixDryRun              bool
+	flagFixIncludeConfirmation bool
 )
 
 var fixCmd = &cobra.Command{
@@ -29,9 +30,10 @@ User-level fixes run immediately. Admin fixes require your password
 via the standard macOS authentication dialog.
 
 Examples:
-  mergen fix              # scan then fix all auto-fixable failures
-  mergen fix --id 2.2.1   # fix one specific check
-  mergen fix --dry-run    # show what would be fixed without applying`,
+  mergen fix              # scan then fix reviewed safe failures
+  mergen fix --id 2.2.1   # review and fix one specific check
+  mergen fix --dry-run    # show safe fixes without applying
+  mergen fix --include-confirmation-required # include higher-impact fixes for review`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		output.PrintBanner()
 
@@ -58,6 +60,9 @@ Examples:
 					if r.Check.Fix() == nil {
 						return fmt.Errorf("check %s does not have an auto-fix", flagFixID)
 					}
+					if r.Check.Fix().Risk == checks.RiskGuided || r.Check.Fix().Risk == checks.RiskProhibited {
+						return fmt.Errorf("check %s requires guided remediation and cannot run through the legacy shell executor", flagFixID)
+					}
 					toFix = append(toFix, r)
 					break
 				}
@@ -66,9 +71,15 @@ Examples:
 				return fmt.Errorf("check with CIS ID %q not found", flagFixID)
 			}
 		} else {
-			// All fixable failures
+			// The default batch contains only reviewed safe fixes. Confirmation-
+			// required fixes need an explicit flag and are still shown before the
+			// final confirmation prompt.
 			for _, r := range results {
-				if r.Result.Status == checks.StatusFail && r.Check.Fix() != nil {
+				fix := r.Check.Fix()
+				if r.Result.Status != checks.StatusFail || fix == nil {
+					continue
+				}
+				if fix.Risk == checks.RiskSafe || (flagFixIncludeConfirmation && fix.Risk == checks.RiskConfirm) {
 					toFix = append(toFix, r)
 				}
 			}
@@ -86,9 +97,13 @@ Examples:
 
 		var adminFixes []checks.CheckResult
 		var userFixes []checks.CheckResult
+		requiresConfirmation := false
 
 		for _, r := range toFix {
 			fi := r.Check.Fix()
+			if fi.Risk == checks.RiskConfirm {
+				requiresConfirmation = true
+			}
 			privTag := output.Muted.Render("[user] ")
 			if fi.RequiresAdmin {
 				privTag = output.WarnTxt.Render("[admin]")
@@ -96,8 +111,8 @@ Examples:
 			} else {
 				userFixes = append(userFixes, r)
 			}
-			fmt.Printf("  %s %s  %s\n",
-				output.FailTxt.Render("✗"), privTag, r.Check.Name(),
+			fmt.Printf("  %s %s [%s] %s\n",
+				output.FailTxt.Render("✗"), privTag, fi.Risk, r.Check.Name(),
 			)
 			if fi.Description != "" {
 				fmt.Println(output.OutputTxt.Render("  → " + fi.Description))
@@ -111,7 +126,9 @@ Examples:
 		}
 
 		// Confirm
-		if !flagFixAll {
+		// Confirmation-class fixes always require an interactive acknowledgement.
+		// --yes may skip the prompt only when every selected fix is batch-safe.
+		if !flagFixAll || requiresConfirmation {
 			fmt.Print(output.Muted.Render("  Apply fixes? [y/N] "))
 			reader := bufio.NewReader(os.Stdin)
 			answer, _ := reader.ReadString('\n')
@@ -216,7 +233,8 @@ func applyAdminFixes(adminFixes []checks.CheckResult) {
 
 func init() {
 	fixCmd.Flags().StringVar(&flagFixID, "id", "", "Fix a single check by CIS ID (e.g. 2.2.1)")
-	fixCmd.Flags().BoolVarP(&flagFixAll, "yes", "y", false, "Apply all fixes without confirmation prompt")
+	fixCmd.Flags().BoolVarP(&flagFixAll, "yes", "y", false, "Apply reviewed safe fixes without confirmation prompt")
 	fixCmd.Flags().BoolVar(&flagFixDryRun, "dry-run", false, "Show what would be fixed without applying")
+	fixCmd.Flags().BoolVar(&flagFixIncludeConfirmation, "include-confirmation-required", false, "Include higher-impact fixes that always prompt for review")
 	rootCmd.AddCommand(fixCmd)
 }

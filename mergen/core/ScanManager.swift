@@ -123,7 +123,9 @@ class ScanManager: ObservableObject {
     /// single failing command doesn't block the rest. Real success is determined
     /// by re-running each check after the batch completes.
     func fixAll(_ vulnerabilities: [Vulnerability]) {
-        let fixable    = vulnerabilities.filter { $0.isAutoFixable }
+        // Defense in depth: callers cannot batch confirmation-required or
+        // guided remediations even if the UI passes them accidentally.
+        let fixable    = vulnerabilities.filter { $0.isBatchFixable }
         let userFixes  = fixable.filter { !$0.fixRequiresAdmin }
         let adminFixes = fixable.filter {  $0.fixRequiresAdmin }
         guard !fixable.isEmpty else { return }

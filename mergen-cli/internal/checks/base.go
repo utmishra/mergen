@@ -38,6 +38,9 @@ func newCheck(
 	fix *FixInfo,
 	runFn func() Result,
 ) Check {
+	if fix != nil && fix.Risk == "" {
+		fix.Risk = remediationRiskFor(cisID)
+	}
 	return &checkFn{
 		base: base{
 			cisID:       cisID,
@@ -51,6 +54,21 @@ func newCheck(
 			fix:         fix,
 		},
 		runFn: runFn,
+	}
+}
+
+// remediationRiskFor is deliberately allowlist-based. Unknown fixes require
+// confirmation instead of silently becoming eligible for a batch operation.
+func remediationRiskFor(cisID string) RemediationRisk {
+	switch cisID {
+	case "1.2", "1.3", "1.4", "1.5",
+		"2.2.1", "2.2.2", "2.6.5", "2.11.2",
+		"6.1.1", "6.3.3", "6.3.4", "6.4.1":
+		return RiskSafe
+	case "5.2.1", "5.2.2", "5.4", "5.5", "5.11", "5.6":
+		return RiskGuided
+	default:
+		return RiskConfirm
 	}
 }
 

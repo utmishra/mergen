@@ -14,7 +14,13 @@ struct FixAllSheet: View {
     @State private var showLog = false
 
     private var fixable: [Vulnerability] {
-        scanManager.scanResults.filter { $0.isAutoFixable }
+        scanManager.scanResults.filter { $0.isBatchFixable }
+    }
+
+    private var requiresIndividualReview: Int {
+        scanManager.scanResults.filter {
+            $0.checkstatus == "Red" && $0.remediationRisk != .safe
+        }.count
     }
 
     private var adminCount:   Int  { fixable.filter {  $0.fixRequiresAdmin }.count }
@@ -28,9 +34,9 @@ struct FixAllSheet: View {
             // ── Header ──────────────────────────────────────────────────────
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Fix All Issues")
+                    Text("Fix Safe Issues")
                         .font(.system(size: 18, weight: .bold))
-                    Text("\(fixable.count) issue\(fixable.count == 1 ? "" : "s") can be fixed automatically")
+                    Text("\(fixable.count) reviewed issue\(fixable.count == 1 ? "" : "s") can be fixed as a batch")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -45,6 +51,14 @@ struct FixAllSheet: View {
             .padding(20)
 
             Divider()
+
+            if requiresIndividualReview > 0 {
+                Text("\(requiresIndividualReview) additional finding\(requiresIndividualReview == 1 ? " requires" : "s require") individual review and will not be changed by this batch.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+            }
 
             // ── Admin privilege notice ───────────────────────────────────────
             if adminCount > 0 {
