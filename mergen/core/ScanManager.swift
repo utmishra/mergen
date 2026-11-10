@@ -18,6 +18,14 @@ class ScanManager: ObservableObject {
     private var totalModules: Int = 0
     
     func startScan(category: String?) {
+        // A rescan replaces the previous snapshot. Keeping old objects here
+        // causes every run to append another copy of all findings.
+        guard !scanning else { return }
+        scanResults.removeAll(keepingCapacity: true)
+        progress = 0
+        fixingIDs.removeAll()
+        fixResults.removeAll()
+        fixCancelled.removeAll()
         scanning = true
         AuditLogger.shared.logScanStart(category: category)
 
