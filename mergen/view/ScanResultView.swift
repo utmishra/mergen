@@ -150,7 +150,7 @@ struct ResultsListView: View {
     private var passedCount:   Int { base.filter { $0.checkstatus == "Green" }.count }
     private var warnedCount:   Int { base.filter { $0.checkstatus == "Yellow" }.count }
     private var advisoryCount: Int { base.filter { $0.checkstatus == "Blue" || $0.isManual }.count }
-    private var fixableCount:  Int { base.filter { $0.isAutoFixable }.count }
+    private var fixableCount:  Int { base.filter { $0.isBatchFixable }.count }
     private var hasFilters: Bool { statusFilter != .all || severityFilter != "Any" || !searchText.isEmpty }
 
     // MARK: Body
@@ -223,7 +223,7 @@ struct ResultsListView: View {
                                     Button {
                                         showFixSheet = true
                                     } label: {
-                                        Label("Fix \(fixableCount) Issue\(fixableCount == 1 ? "" : "s")",
+                                        Label("Fix \(fixableCount) Safe Issue\(fixableCount == 1 ? "" : "s")",
                                               systemImage: "bolt.fill")
                                             .font(.system(size: 11, weight: .semibold))
                                     }
