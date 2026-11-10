@@ -2,90 +2,132 @@
 //  AuditLogger.swift
 //  mergen
 //
-//  Writes structured log entries to ~/Library/Logs/mergen/mergen-YYYY-MM-DD.log.
-//  All writes are async on a background serial queue (never blocks the UI).
+//  Structured, private JSON Lines audit log. Evidence is normalized and
+//  redacted before it reaches disk; executable command strings are never logged.
 //
 
 import Foundation
 
 final class AuditLogger {
-
     static let shared = AuditLogger()
 
     private let logURL: URL
-    private let queue  = DispatchQueue(label: "com.mergen.logger", qos: .background)
-    private let stamp  = DateFormatter()
+    private let queue = DispatchQueue(label: "com.mergen.logger", qos: .background)
 
     private init() {
-        stamp.dateFormat = "yyyy-MM-dd HH:mm:ss"
-
-        let lib = FileManager.default
-            .urls(for: .libraryDirectory, in: .userDomainMask).first!
-        let dir = lib.appendingPathComponent("Logs/mergen", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
+        let directory = library.appendingPathComponent("Logs/mergen", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
 
         let day = String(ISO8601DateFormatter().string(from: Date()).prefix(10))
-        logURL = dir.appendingPathComponent("mergen-\(day).log")
+        logURL = directory.appendingPathComponent("mergen-\(day).jsonl")
     }
-
-    // MARK: - Public API
 
     func logScanStart(category: String?) {
-        write("SCAN_START  category=\"\(category ?? "All")\"")
+        write(event: "scan_start", fields: ["category": category ?? "All"])
     }
 
-    func logCheckResult(_ v: Vulnerability) {
-        let status = v.checkstatus ?? "unknown"
-        let result = v.status.map { " result=\"\($0)\"" } ?? ""
-        write("CHECK       cisID=\"\(v.cisID.isEmpty ? "-" : v.cisID)\" status=\(status) name=\"\(v.name)\"\(result)")
+    func logCheckResult(_ vulnerability: Vulnerability) {
+        write(event: "check_result", fields: [
+            "cis_id": vulnerability.cisID.isEmpty ? "-" : vulnerability.cisID,
+            "status": vulnerability.checkstatus ?? "unknown",
+            "name": vulnerability.name,
+            "result": redact(vulnerability.status ?? ""),
+        ])
     }
 
     func logScanComplete(_ results: [Vulnerability]) {
-        let pass     = results.filter { $0.checkstatus == "Green"  }.count
-        let fail     = results.filter { $0.checkstatus == "Red"    }.count
-        let warn     = results.filter { $0.checkstatus == "Yellow" }.count
-        let advisory = results.filter { $0.checkstatus == "Blue"   }.count
-        write("SCAN_DONE   total=\(results.count) pass=\(pass) fail=\(fail) warn=\(warn) advisory=\(advisory)")
+        write(event: "scan_complete", fields: [
+            "total": String(results.count),
+            "passed": String(results.filter { $0.checkstatus == "Green" }.count),
+            "failed": String(results.filter { $0.checkstatus == "Red" }.count),
+            "warnings": String(results.filter { $0.checkstatus == "Yellow" }.count),
+            "advisories": String(results.filter { $0.checkstatus == "Blue" }.count),
+        ])
     }
 
-    func logFixStart(_ v: Vulnerability) {
-        let priv = v.fixRequiresAdmin ? "admin" : "user"
-        let cmd  = v.fixCommand ?? "—"
-        write("FIX_START   cisID=\"\(v.cisID)\" name=\"\(v.name)\" priv=\(priv) cmd=\"\(cmd)\"")
+    func logFixStart(_ vulnerability: Vulnerability) {
+        write(event: "fix_start", fields: [
+            "cis_id": vulnerability.cisID,
+            "name": vulnerability.name,
+            "operation": vulnerability.fixOperation?.auditLabel ?? "unavailable",
+        ])
     }
 
-    func logFixResult(_ v: Vulnerability, success: Bool) {
-        write("FIX_RESULT  cisID=\"\(v.cisID)\" name=\"\(v.name)\" success=\(success)")
+    func logFixResult(_ vulnerability: Vulnerability, success: Bool) {
+        write(event: "fix_result", fields: [
+            "cis_id": vulnerability.cisID,
+            "name": vulnerability.name,
+            "success": String(success),
+        ])
+    }
+
+    func logFixExecutionError(_ vulnerability: Vulnerability, message: String) {
+        write(event: "fix_execution_error", fields: [
+            "cis_id": vulnerability.cisID,
+            "name": vulnerability.name,
+            "message": redact(message),
+        ])
     }
 
     func logAdminError(code: Int, message: String) {
-        write("ADMIN_ERR   code=\(code) msg=\"\(message)\"")
+        write(event: "helper_error", fields: [
+            "code": String(code),
+            "message": redact(message),
+        ])
     }
 
-    /// URL of today's log file (for "Open in Finder" / "Reveal" actions).
     var logFileURL: URL { logURL }
 
-    /// Returns the last `limit` log lines (most recent last).
     func recentLines(limit: Int = 600) -> [String] {
         guard let raw = try? String(contentsOf: logURL, encoding: .utf8) else { return [] }
-        let lines = raw.components(separatedBy: "\n").filter { !$0.isEmpty }
-        return Array(lines.suffix(limit))
+        return Array(raw.split(separator: "\n").suffix(limit).map(String.init))
     }
 
-    // MARK: - Private
-
-    private func write(_ body: String) {
-        let line = "[\(stamp.string(from: Date()))] \(body)\n"
+    private func write(event: String, fields: [String: String]) {
         queue.async {
-            guard let data = line.data(using: .utf8) else { return }
-            if FileManager.default.fileExists(atPath: self.logURL.path),
-               let fh = try? FileHandle(forWritingTo: self.logURL) {
-                fh.seekToEndOfFile()
-                fh.write(data)
-                fh.closeFile()
-            } else {
-                try? data.write(to: self.logURL, options: .atomic)
+            var record = fields
+            record["timestamp"] = ISO8601DateFormatter().string(from: Date())
+            record["event"] = event
+            guard JSONSerialization.isValidJSONObject(record),
+                  var data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) else { return }
+            data.append(0x0A)
+
+            if !FileManager.default.fileExists(atPath: self.logURL.path) {
+                FileManager.default.createFile(
+                    atPath: self.logURL.path,
+                    contents: nil,
+                    attributes: [.posixPermissions: 0o600]
+                )
+            }
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: self.logURL.path)
+            guard let handle = try? FileHandle(forWritingTo: self.logURL) else { return }
+            defer { try? handle.close() }
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } catch {
+                return
             }
         }
+    }
+
+    private func redact(_ value: String) -> String {
+        var result = value.replacingOccurrences(
+            of: NSHomeDirectory(),
+            with: "$HOME",
+            options: [.caseInsensitive]
+        )
+        result = result.replacingOccurrences(
+            of: #"(?i)(token|password|secret|authorization)\s*[:=]\s*\S+"#,
+            with: "$1=[REDACTED]",
+            options: .regularExpression
+        )
+        return String(result.prefix(2_000))
     }
 }

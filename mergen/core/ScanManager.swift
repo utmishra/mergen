@@ -80,18 +80,17 @@ class ScanManager: ObservableObject {
     /// Applies the fix for a single vulnerability, then re-runs its check.
     /// Success is determined by whether the check passes after the fix, not by exit code.
     func applyFix(for vulnerability: Vulnerability) {
-        guard vulnerability.isAutoFixable else { return }
+        guard vulnerability.isAutoFixable,
+              let operation = vulnerability.fixOperation else { return }
         let id = vulnerability.id
         fixingIDs.insert(id)
         AuditLogger.shared.logFixStart(vulnerability)
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let cmd    = vulnerability.fixCommand!
-            let result: FixResult
-            if vulnerability.fixRequiresAdmin {
-                result = FixManager.runAdminCommand(cmd)
-            } else {
-                result = FixManager.runUserCommand(cmd)
+            let result = FixManager.run(operation)
+
+            if case .executionError(let message) = result {
+                AuditLogger.shared.logFixExecutionError(vulnerability, message: message)
             }
 
             // Re-run the check unless the user cancelled the password dialog.
@@ -117,17 +116,12 @@ class ScanManager: ObservableObject {
         }
     }
 
-    /// Applies fixes for a list of vulnerabilities.
-    /// User-level fixes run one at a time (no password needed).
-    /// Admin fixes are batched into ONE password dialog, joined with `;` so a
-    /// single failing command doesn't block the rest. Real success is determined
-    /// by re-running each check after the batch completes.
+    /// Applies reviewed, typed user-level fixes one at a time. Privileged fixes
+    /// are not executable until the authenticated helper is shipped.
     func fixAll(_ vulnerabilities: [Vulnerability]) {
         // Defense in depth: callers cannot batch confirmation-required or
         // guided remediations even if the UI passes them accidentally.
         let fixable    = vulnerabilities.filter { $0.isBatchFixable }
-        let userFixes  = fixable.filter { !$0.fixRequiresAdmin }
-        let adminFixes = fixable.filter {  $0.fixRequiresAdmin }
         guard !fixable.isEmpty else { return }
 
         fixingIDs.formUnion(fixable.map { $0.id })
@@ -135,9 +129,12 @@ class ScanManager: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async {
 
-            // ── User-level fixes (no password) ──────────────────────────────
-            for v in userFixes {
-                _ = FixManager.runUserCommand(v.fixCommand!)
+            for v in fixable {
+                guard let operation = v.fixOperation else { continue }
+                let result = FixManager.run(operation)
+                if case .executionError(let message) = result {
+                    AuditLogger.shared.logFixExecutionError(v, message: message)
+                }
                 v.check()
                 let success = v.checkstatus == "Green"
                 AuditLogger.shared.logFixResult(v, success: success)
@@ -148,40 +145,6 @@ class ScanManager: ObservableObject {
                 }
             }
 
-            // ── Admin fixes — ONE password prompt ────────────────────────────
-            // Join with `;` (not `&&`) so each command runs independently.
-            // FixManager wraps the whole thing in `bash -c '...; exit 0'` so
-            // the AppleScript call itself never fails due to individual commands.
-            if !adminFixes.isEmpty {
-                let combined = adminFixes.compactMap { $0.fixCommand }
-                                         .joined(separator: " ; ")
-                let result = FixManager.runAdminCommand(combined)
-
-                if case .cancelled = result {
-                    // User dismissed the dialog — mark all admin fixes as cancelled.
-                    for v in adminFixes {
-                        AuditLogger.shared.logFixResult(v, success: false)
-                        DispatchQueue.main.async {
-                            self.fixingIDs.remove(v.id)
-                            self.fixCancelled.insert(v.id)
-                            self.objectWillChange.send()
-                        }
-                    }
-                    return
-                }
-
-                // Script ran — re-check each vulnerability to determine real outcome.
-                for v in adminFixes {
-                    v.check()
-                    let success = v.checkstatus == "Green"
-                    AuditLogger.shared.logFixResult(v, success: success)
-                    DispatchQueue.main.async {
-                        self.fixingIDs.remove(v.id)
-                        self.fixResults[v.id] = success
-                        self.objectWillChange.send()
-                    }
-                }
-            }
         }
     }
 }

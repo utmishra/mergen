@@ -48,7 +48,53 @@ extension Vulnerability {
         return fixCommand == nil ? .prohibited : .confirm
     }
 
-    // MARK: - Fix Registries
+    // MARK: - Typed Remediation Registry
+
+    /// Reviewed, typed user-level operations. Adding a new auto-fix requires a
+    /// source-code change; advisory feeds can never introduce executable input.
+    var fixOperation: RemediationOperation? {
+        switch cisID {
+        case "2.3.1.1":
+            return .defaultsWrite(domain: "com.apple.NetworkBrowser", key: "DisableAirDrop", value: .boolean(true))
+        case "2.3.1.2":
+            return .defaultsWrite(domain: "com.apple.controlcenter", key: "AirplayRecieverEnabled", value: .integer(0))
+        case "2.3.3.10":
+            return .defaultsWrite(domain: "com.apple.Bluetooth", key: "PrefKeyServicesEnabled", value: .boolean(false), currentHost: true)
+        case "2.5.2.1":
+            return .defaultsWrite(domain: "com.apple.Siri", key: "SiriProfessionalEnabled", value: .boolean(false))
+        case "2.6.3.2":
+            return .defaultsWrite(domain: "com.apple.assistant.support", key: "Siri Data Sharing Opt-In Status", value: .integer(2))
+        case "2.6.3.3":
+            return .defaultsWrite(domain: "com.apple.Accessibility", key: "AXSAudioDonationSiriImprovementEnabled", value: .boolean(false))
+        case "2.6.4":
+            return .defaultsWrite(domain: "com.apple.AdLib", key: "allowApplePersonalizedAdvertising", value: .boolean(false))
+        case "2.8.1":
+            return .defaultsWrite(domain: "com.apple.universalcontrol", key: "Disable", value: .integer(1), currentHost: true)
+        case "2.11.1":
+            return .defaultsWrite(domain: "com.apple.screensaver", key: "idleTime", value: .integer(1200), currentHost: true)
+        case "2.11.2":
+            return .sequence([
+                .defaultsWrite(domain: "com.apple.screensaver", key: "askForPassword", value: .boolean(true), currentHost: true),
+                .defaultsWrite(domain: "com.apple.screensaver", key: "askForPasswordDelay", value: .integer(0), currentHost: true),
+            ])
+        case "6.1.1":
+            return .defaultsWrite(domain: "NSGlobalDomain", key: "AppleShowAllExtensions", value: .boolean(true))
+        case "6.3.3":
+            return .defaultsWrite(domain: "com.apple.Safari", key: "WarnAboutFraudulentWebsites", value: .boolean(true))
+        case "6.3.4":
+            return .defaultsWrite(domain: "com.apple.Safari", key: "BlockStoragePolicy", value: .integer(2))
+        case "6.3.6":
+            return .defaultsWrite(domain: "com.apple.Safari", key: "WebKitPreferences.privateClickMeasurementEnabled", value: .boolean(true))
+        case "6.3.10":
+            return .defaultsWrite(domain: "com.apple.Safari", key: "ShowOverlayStatusBar", value: .boolean(true))
+        case "6.4.1":
+            return .defaultsWrite(domain: "com.apple.Terminal", key: "SecureKeyboardEntry", value: .boolean(true))
+        default:
+            return nil
+        }
+    }
+
+    // MARK: - Legacy Command Registries
 
     /// Fixes that run as the current user (no password prompt).
     private static let userFixes: [String: String] = [
@@ -272,7 +318,7 @@ extension Vulnerability {
     /// prohibited changes are deliberately excluded from legacy execution.
     var isAutoFixable: Bool {
         checkstatus == "Red"
-            && fixCommand != nil
+            && fixOperation != nil
             && (remediationRisk == .safe || remediationRisk == .confirm)
     }
 
